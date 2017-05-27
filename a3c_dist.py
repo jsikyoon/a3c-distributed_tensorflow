@@ -94,7 +94,7 @@ def train():
     training_thread = A3CTrainingThread(0, "", initial_learning_rate,
                                           learning_rate_input,
                                           grad_applier, MAX_TIME_STEP,
-                                          device = device)
+                                          device = device,task_index=FLAGS.task_index)
     
     # prepare session
     with tf.device(tf.train.replica_device_setter(
@@ -124,13 +124,15 @@ def train():
       wall_t=0.0;
       start_time = time.time() - wall_t
       training_thread.set_start_time(start_time)
+      local_t=0;
       while True:
-        #print(str(FLAGS.task_index)+","+str(sess.run([global_step])[0]));
         if sess.run([global_step])[0] > MAX_TIME_STEP:
           break
         diff_global_t = training_thread.process(sess, sess.run([global_step])[0], "",
                                                 summary_op, "",score_ph,score_ops)
         sess.run(global_step_ops,{global_step_ph:sess.run([global_step])[0]+diff_global_t});
+        print(str(FLAGS.task_index)+","+str(sess.run([global_step])[0]));
+        local_t+=diff_global_t;
     
     sv.stop();
     print("Done");

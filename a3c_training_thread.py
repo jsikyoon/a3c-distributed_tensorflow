@@ -25,7 +25,7 @@ class A3CTrainingThread(object):
                learning_rate_input,
                grad_applier,
                max_global_time_step,
-               device):
+               device,task_index=""):
 
     self.thread_index = thread_index
     self.learning_rate_input = learning_rate_input
@@ -57,8 +57,10 @@ class A3CTrainingThread(object):
         self.local_network.get_vars(),
         self.gradients )
       self.mode="dist_tensor";
-    
-    self.game_state = GameState(113 * thread_index)
+    if not (task_index): 
+      self.game_state = GameState(113 * thread_index)
+    else:
+      self.game_state = GameState(113 * task_index)
     
     self.local_t = 0
 
@@ -118,9 +120,9 @@ class A3CTrainingThread(object):
       actions.append(action)
       values.append(value_)
 
-      #if (self.thread_index == 0) and (self.local_t % LOG_INTERVAL == 0):
-      #  print("pi={}".format(pi_))
-      #  print(" V={}".format(value_))
+      if (self.thread_index == 0) and (self.local_t % LOG_INTERVAL == 0):
+        print("pi={}".format(pi_))
+        print(" V={}".format(value_))
 
       # process game
       self.game_state.process(action)
@@ -141,7 +143,7 @@ class A3CTrainingThread(object):
       
       if terminal:
         terminal_end = True
-        #print("score={}".format(self.episode_reward))
+        print("score={}".format(self.episode_reward))
         if summary_writer:
           self._record_score(sess, summary_writer, summary_op, score_input,
                              self.episode_reward, global_t)

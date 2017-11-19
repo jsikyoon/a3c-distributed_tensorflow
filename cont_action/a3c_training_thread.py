@@ -31,6 +31,9 @@ class A3CTrainingThread(object):
     self.thread_index = thread_index
     self.learning_rate_input = learning_rate_input
     self.max_global_time_step = max_global_time_step
+    self.game_state = GameState()
+    state=self.game_state.reset();
+    self.game_state.reset_gs(state);
 
     if USE_LSTM:
       self.local_network = GameACLSTMNetwork(ACTION_SIZE, thread_index, device)
@@ -58,10 +61,6 @@ class A3CTrainingThread(object):
         self.local_network.get_vars(),
         self.gradients )
       self.mode="dist_tensor";
-    if not (task_index): 
-      self.game_state = GameState(113 * thread_index)
-    else:
-      self.game_state = GameState(113 * task_index)
     
     self.local_t = 0
 
@@ -91,9 +90,6 @@ class A3CTrainingThread(object):
   def set_start_time(self, start_time):
     self.start_time = start_time
 
-  def get_episode_reward(self):
-    return self.episode_reward;
-
   def process(self, sess, global_t, summary_writer, summary_op, score_input,score_ph="",score_ops=""):
     states = []
     actions = []
@@ -111,19 +107,16 @@ class A3CTrainingThread(object):
 
     if USE_LSTM:
       start_lstm_state = self.local_network.lstm_state_out
-    
+
     # t_max times loop
     for i in range(LOCAL_T_MAX):
-      pi_, value_ = self.local_network.run_policy_and_value(sess, self.game_state.s_t)
-      action = self.choose_action(pi_)
-
+      action, value_ = self.local_network.run_policy_and_value(sess, self.game_state.s_t)
       states.append(self.game_state.s_t)
       actions.append(action)
       values.append(value_)
 
-      if (self.thread_index == 0) and (self.local_t % LOG_INTERVAL == 0):
-        print("pi={}".format(pi_))
-        print(" V={}".format(value_))
+      #if (self.thread_index == 0) and (self.local_t % LOG_INTERVAL == 0):
+      #  print(" V={}".format(value_))
 
       # process game
       self.game_state.process(action)
@@ -141,18 +134,22 @@ class A3CTrainingThread(object):
 
       # s_t1 -> s_t
       self.game_state.update()
-      
       if terminal:
         terminal_end = True
-        print("score={}".format(self.episode_reward))
+        print("score={}".format(self.episode_reward/200.))
+        score=self.episode_reward/200.;
         if summary_writer:
           self._record_score(sess, summary_writer, summary_op, score_input,
-                             self.episode_reward, global_t)
+            self.episode_reward/200., global_t)
         else:
-          sess.run(score_ops,{score_ph:self.episode_reward});
+          sess.run(score_ops,{score_ph:self.episode_reward/200.});
+
+        #self._record_score(sess, summary_writer, summary_op, score_input,
+        #                   self.episode_reward, global_t)
           
         self.episode_reward = 0
-        self.game_state.reset()
+        state=self.game_state.reset()
+        self.game_state.reset_gs(state);
         if USE_LSTM:
           self.local_network.reset_state()
         break
@@ -160,6 +157,7 @@ class A3CTrainingThread(object):
     R = 0.0
     if not terminal_end:
       R = self.local_network.run_value(sess, self.game_state.s_t)
+      score=self.episode_reward/200.;
 
     actions.reverse()
     states.reverse()
@@ -175,26 +173,21 @@ class A3CTrainingThread(object):
     for(ai, ri, si, Vi) in zip(actions, rewards, states, values):
       R = ri + GAMMA * R
       td = R - Vi
-      a = np.zeros([ACTION_SIZE])
-      a[ai] = 1
 
       batch_si.append(si)
-      batch_a.append(a)
-      batch_td.append(td)
       batch_R.append(R)
+      batch_td.append(td);
 
     cur_learning_rate = self._anneal_learning_rate(global_t)
 
     if USE_LSTM:
       batch_si.reverse()
-      batch_a.reverse()
       batch_td.reverse()
       batch_R.reverse()
 
       sess.run( self.apply_gradients,
                 feed_dict = {
                   self.local_network.s: batch_si,
-                  self.local_network.a: batch_a,
                   self.local_network.td: batch_td,
                   self.local_network.r: batch_R,
                   self.local_network.initial_lstm_state: start_lstm_state,
@@ -204,9 +197,8 @@ class A3CTrainingThread(object):
       sess.run( self.apply_gradients,
                 feed_dict = {
                   self.local_network.s: batch_si,
-                  self.local_network.a: batch_a,
-                  self.local_network.td: batch_td,
                   self.local_network.r: batch_R,
+                  self.local_network.td: batch_td,
                   self.learning_rate_input: cur_learning_rate} )
       
     if (self.thread_index == 0) and (self.local_t - self.prev_local_t >= PERFORMANCE_LOG_INTERVAL):

@@ -7,7 +7,6 @@ import sys
 
 from game_state import GameState
 from game_state import ACTION_SIZE
-from game_state import STATE_SIZE
 from game_ac_network import GameACFFNetwork, GameACLSTMNetwork
 
 from constants import GAMMA

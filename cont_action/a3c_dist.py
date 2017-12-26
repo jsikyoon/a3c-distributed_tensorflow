@@ -14,10 +14,10 @@ from game_ac_network import GameACFFNetwork, GameACLSTMNetwork
 from a3c_training_thread import A3CTrainingThread
 from rmsprop_applier import RMSPropApplier
 
-from constants import ACTION_SIZE
-from constants import PARALLEL_SIZE
-from constants import INITIAL_ALPHA_LOW
-from constants import INITIAL_ALPHA_HIGH
+from constants import PINITIAL_ALPHA_LOW
+from constants import PINITIAL_ALPHA_HIGH
+from constants import VINITIAL_ALPHA_LOW
+from constants import VINITIAL_ALPHA_HIGH
 from constants import INITIAL_ALPHA_LOG_RATE
 from constants import MAX_TIME_STEP
 from constants import CHECKPOINT_DIR
@@ -40,8 +40,11 @@ def log_uniform(lo, hi, rate):
 
 def train():
   #initial learning rate
-  initial_learning_rate = log_uniform(INITIAL_ALPHA_LOW,
-                                      INITIAL_ALPHA_HIGH,
+  pinitial_learning_rate = log_uniform(PINITIAL_ALPHA_LOW,
+                                      PINITIAL_ALPHA_HIGH,
+                                      INITIAL_ALPHA_LOG_RATE)
+  vinitial_learning_rate = log_uniform(VINITIAL_ALPHA_LOW,
+                                      VINITIAL_ALPHA_HIGH,
                                       INITIAL_ALPHA_LOG_RATE)
 
   # parameter server and worker information
@@ -71,18 +74,17 @@ def train():
     device=tf.train.replica_device_setter(
           worker_device="/job:worker/task:%d" % FLAGS.task_index,
           cluster=cluster);
-  
-    """
-    # There are no global network
-    if USE_LSTM:
-      global_network = GameACLSTMNetwork(ACTION_SIZE, -1, device)
-    else:
-      global_network = GameACFFNetwork(ACTION_SIZE, -1, device)
-    """
     
-    learning_rate_input = tf.placeholder("float")
+    plearning_rate_input = tf.placeholder("float")
+    vlearning_rate_input = tf.placeholder("float")
     
-    grad_applier = RMSPropApplier(learning_rate = learning_rate_input,
+    pgrad_applier = RMSPropApplier(learning_rate = plearning_rate_input,
+                                  decay = RMSP_ALPHA,
+                                  momentum = 0.0,
+                                  epsilon = RMSP_EPSILON,
+                                  clip_norm = GRAD_NORM_CLIP,
+                                  device = device)
+    vgrad_applier = RMSPropApplier(learning_rate = vlearning_rate_input,
                                   decay = RMSP_ALPHA,
                                   momentum = 0.0,
                                   epsilon = RMSP_EPSILON,
@@ -91,9 +93,10 @@ def train():
     
     tf.set_random_seed(1);
     #There are no global network
-    training_thread = A3CTrainingThread(0, "", initial_learning_rate,
-                                          learning_rate_input,
-                                          grad_applier, MAX_TIME_STEP,
+    training_thread = A3CTrainingThread(0, "", 
+                                          pinitial_learning_rate,plearning_rate_input,pgrad_applier, 
+                                          vinitial_learning_rate,vlearning_rate_input,vgrad_applier, 
+                                          MAX_TIME_STEP,
                                           device = device,task_index=FLAGS.task_index)
     
     # prepare session
@@ -131,7 +134,6 @@ def train():
         diff_global_t = training_thread.process(sess, sess.run([global_step])[0], "",
                                                 summary_op, "",score_ph,score_ops)
         sess.run(global_step_ops,{global_step_ph:sess.run([global_step])[0]+diff_global_t});
-        print(str(FLAGS.task_index)+","+str(sess.run([global_step])[0]));
         local_t+=diff_global_t;
     
     sv.stop();

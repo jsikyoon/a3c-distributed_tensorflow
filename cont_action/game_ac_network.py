@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import tensorflow as tf
-from game_state import STATE_SIZE
 import numpy as np
 import math
 
@@ -9,41 +8,29 @@ import math
 class GameACNetwork(object):
   def __init__(self,
                action_size,
+               state_size,
                thread_index, # -1 for global               
                device="/cpu:0"):
     self._action_size = action_size
+    self._state_size = state_size
     self._thread_index = thread_index
     self._device = device    
 
   def prepare_loss(self, entropy_beta):
     with tf.device(self._device):
-      # taken action (input for policy)
-      #self.a = tf.placeholder("float", [None, self._action_size])
     
       # temporary difference (R-V) (input for policy)
       self.td = tf.placeholder("float", [None])
 
-      # avoid NaN with clipping when value in pi becomes zero
-      log_prob = tf.log(tf.clip_by_value(self.prob, 1e-20, 1.0))
-      
-      # policy entropy
-      #entropy = -tf.reduce_sum(self.pi * log_pi, reduction_indices=1)
-      entropy = -0.5*(tf.log(self.sigma*2*math.pi)+1)
-      
-      # policy loss (output)  (Adding minus, because the original paper's objective function is for gradient ascent, but we use gradient descent optimizer.)
-      #policy_loss = - tf.reduce_sum( tf.reduce_sum( tf.multiply( log_prob, self.action ), reduction_indices=1 ) * self.td + tf.reduce_sum(entropy) * 0.0001 )
-      policy_loss = tf.reduce_sum( tf.reduce_sum( log_prob ) * self.td + tf.reduce_sum(entropy) * 0.0001 )
-      #policy_loss = - tf.reduce_sum( tf.reduce_sum( self.log_prob ) + tf.reduce_sum(entropy * 0.0001))
+      # policy loss
+      self.policy_loss=policy_loss = -1*self.log_prob*self.td -1e-1*self.entropy;
 
       # R (input for value)
       self.r = tf.placeholder("float", [None])
       
       # value loss (output)
       # (Learning rate for Critic is half of Actor's, so multiply by 0.5)
-      value_loss = 0.5*tf.nn.l2_loss(self.r - self.v)
-
-      # gradienet of policy and value are summed up
-      self.total_loss = policy_loss + value_loss
+      self.value_loss=value_loss = tf.squared_difference(self.r, self.v)
 
   def run_policy_and_value(self, sess, s_t):
     raise NotImplementedError()
@@ -78,76 +65,50 @@ class GameACNetwork(object):
     output_channels = weight_shape[1]
     d = 1.0 / np.sqrt(input_channels)
     bias_shape = [output_channels]
-    weight = tf.Variable(tf.random_uniform(weight_shape, minval=-d, maxval=d))
-    bias   = tf.Variable(tf.random_uniform(bias_shape,   minval=-d, maxval=d))
+    #weight = tf.Variable(tf.random_uniform(weight_shape, minval=-d, maxval=d))
+    #bias   = tf.Variable(tf.random_uniform(bias_shape,   minval=-d, maxval=d))
+    weight = tf.Variable(tf.random_uniform(weight_shape))
+    bias   = tf.Variable(tf.random_uniform(bias_shape))
     return weight, bias
-
-  def _conv_variable(self, weight_shape):
-    w = weight_shape[0]
-    h = weight_shape[1]
-    input_channels  = weight_shape[2]
-    output_channels = weight_shape[3]
-    d = 1.0 / np.sqrt(input_channels * w * h)
-    bias_shape = [output_channels]
-    weight = tf.Variable(tf.random_uniform(weight_shape, minval=-d, maxval=d))
-    bias   = tf.Variable(tf.random_uniform(bias_shape,   minval=-d, maxval=d))
-    return weight, bias
-
-  def _conv2d(self, x, W, stride):
-    return tf.nn.conv2d(x, W, strides = [1, stride, stride, 1], padding = "VALID")
 
 # Actor-Critic FF Network
 class GameACFFNetwork(GameACNetwork):
   def __init__(self,
                action_size,
+               state_size,
+               action_low,
+               action_high,
                thread_index, # -1 for global
                device="/cpu:0"):
-    GameACNetwork.__init__(self, action_size, thread_index, device)
+    GameACNetwork.__init__(self, action_size, state_size,thread_index, device)
 
-    scope_name = "net_" + str(self._thread_index)
+    # state (input)
+    self.s = tf.placeholder("float", [None, state_size, 4])
+    s2 = tf.reshape(self.s,[-1, state_size*4]);
+
+    scope_name = "net_" + str(self._thread_index) + "_policy"
     with tf.device(self._device), tf.variable_scope(scope_name) as scope:
-      """
-      self.W_conv1, self.b_conv1 = self._conv_variable([8, 8, 4, 16])  # stride=4
-      self.W_conv2, self.b_conv2 = self._conv_variable([4, 4, 16, 32]) # stride=2
-      self.W_fc1, self.b_fc1 = self._fc_variable([2592, 256])
-      # weight for policy output layer
-      self.W_fc2, self.b_fc2 = self._fc_variable([256, action_size])
-      # weight for value output layer
-      self.W_fc3, self.b_fc3 = self._fc_variable([256, 1])
-      """
-      self.W_fc1, self.b_fc1 = self._fc_variable([STATE_SIZE*4, 200])
-      # weight for policy output layer
-      self.W_fc2, self.b_fc2 = self._fc_variable([200, action_size])
-      self.W_fc3, self.b_fc3 = self._fc_variable([200, action_size])
-      # weight for value output layer
-      self.W_fc4, self.b_fc4 = self._fc_variable([200, 1])
-
-      # state (input)
-      self.s = tf.placeholder("float", [None, STATE_SIZE, 4])
-      s2 = tf.reshape(self.s,[-1, STATE_SIZE*4]);
-   
-      """
-      h_conv1 = tf.nn.relu(self._conv2d(self.s,  self.W_conv1, 4) + self.b_conv1)
-      h_conv2 = tf.nn.relu(self._conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2)
-
-      h_conv2_flat = tf.reshape(h_conv2, [-1, 2592])
-      h_fc1 = tf.nn.relu(tf.matmul(h_conv2_flat, self.W_fc1) + self.b_fc1)
-      """
-      self.h_fc1 = h_fc1 = tf.nn.relu(tf.matmul(s2, self.W_fc1) + self.b_fc1)
+      # for mu
+      self.pW_fc1, self.pb_fc1 = self._fc_variable([state_size*4, action_size])
+      # for sigma
+      self.pW_fc2, self.pb_fc2 = self._fc_variable([state_size*4, action_size])
       # policy (output)
-      self.mu = tf.matmul(h_fc1, self.W_fc2) + self.b_fc2
-      self.sigma = tf.matmul(h_fc1, self.W_fc3) + self.b_fc3
-      # value (output)
-      v_ = tf.matmul(h_fc1, self.W_fc4) + self.b_fc4
-      self.v = tf.reshape( v_, [-1] )
+      self.mu = tf.matmul(s2, self.pW_fc1) + self.pb_fc1
+      self.sigma = tf.matmul(s2, self.pW_fc2) + self.pb_fc2
+      self.sigma = tf.nn.softplus(self.sigma)
       #SoftPlus operation
-      self.sigma=tf.log(1 + tf.exp(self.sigma));
-      eps=tf.random_normal([action_size]);
-      #self.action=self.mu+tf.sqrt(self.sigma)*eps;
-      self.action=self.mu;
-      a = tf.exp(-1*(self.action-self.mu)**2/(self.sigma+1));
-      b = 1/tf.sqrt(2*self.sigma*math.pi+1)
-      self.prob=a*b;
+      self.normal_dist=tf.contrib.distributions.Normal(self.mu,self.sigma);
+      self.action = self.normal_dist._sample_n(1)
+      self.action = tf.clip_by_value(self.action,action_low,action_high);
+      self.log_prob = self.normal_dist.log_prob(self.action);
+      self.entropy = self.normal_dist.entropy();
+
+    scope_name = "net_" + str(self._thread_index) + "_value"
+    with tf.device(self._device), tf.variable_scope(scope_name) as scope:
+      # for value
+      self.vW_fc1, self.vb_fc1 = self._fc_variable([state_size*4, action_size])
+      v_ = tf.matmul(s2,self.vW_fc1)+self.vb_fc1;
+      self.v = tf.reshape(v_,[-1]);
 
   def run_policy_and_value(self, sess, s_t):
     action_out, v_out = sess.run( [self.action, self.v], feed_dict = {self.s : [s_t]} )
@@ -162,27 +123,30 @@ class GameACFFNetwork(GameACNetwork):
     return v_out[0]
 
   def get_vars(self):
-    #return [self.W_conv1, self.b_conv1,
-    #        self.W_conv2, self.b_conv2,
-    #        self.W_fc1, self.b_fc1,
-    #        self.W_fc2, self.b_fc2,
-    #        self.W_fc3, self.b_fc3]
-    return [self.W_fc1, self.b_fc1,
-            self.W_fc2, self.b_fc2,
-            self.W_fc3, self.b_fc3,
-            self.W_fc4, self.b_fc4]
+    return [self.pW_fc1, self.pb_fc1,
+            self.pW_fc2, self.pb_fc2,
+            self.vW_fc1, self.vb_fc1]
+  def get_pvars(self):
+    return [self.pW_fc1, self.pb_fc1,
+            self.pW_fc2, self.pb_fc2]
+  def get_vvars(self):
+    return [self.vW_fc1, self.vb_fc1]
 
 # Actor-Critic LSTM Network
 class GameACLSTMNetwork(GameACNetwork):
   def __init__(self,
                action_size,
+               state_size,
+               action_low,
+               action_high,
                thread_index, # -1 for global
                device="/cpu:0" ):
-    GameACNetwork.__init__(self, action_size, thread_index, device)
+    GameACNetwork.__init__(self, action_size,state_size, thread_index, device)
 
     # state (input)
-    self.s = tf.placeholder("float", [None, STATE_SIZE, 4])
-    s2 = tf.reshape(self.s,[-1, STATE_SIZE*4]);
+    self.s = tf.placeholder("float", [None, state_size, 4])
+    s2 = tf.reshape(self.s,[-1, state_size*4]);
+    
 
     # place holder for LSTM unrolling time step size.
     self.pstep_size = tf.placeholder(tf.float32, [1])
@@ -191,8 +155,9 @@ class GameACLSTMNetwork(GameACNetwork):
     self.pinitial_lstm_state = tf.contrib.rnn.LSTMStateTuple(self.pinitial_lstm_state0,self.pinitial_lstm_state1)
     scope_name = "net_" + str(self._thread_index)+"_policy"
     with tf.device(self._device), tf.variable_scope(scope_name) as scope:
-      ### policy weights
-      self.pW_fc1, self.pb_fc1 = self._fc_variable([STATE_SIZE*4, 200])
+      ### policy weight
+      
+      self.pW_fc1, self.pb_fc1 = self._fc_variable([state_size*4, 200])
       # lstm
       self.plstm = tf.contrib.rnn.BasicLSTMCell(200, state_is_tuple=True)
       # weight for policy output layer
@@ -211,13 +176,13 @@ class GameACLSTMNetwork(GameACNetwork):
       plstm_outputs = tf.reshape(plstm_outputs, [-1,200])
       self.mu = tf.matmul(plstm_outputs, self.pW_fc2) + self.pb_fc2
       self.sigma = tf.matmul(plstm_outputs, self.pW_fc3) + self.pb_fc3
+      self.sigma = tf.nn.softplus(self.sigma)+1e-5
       #SoftPlus operation
-      self.sigma=tf.log(1 + tf.exp(self.sigma));
-      eps=tf.random_normal([action_size]);
-      self.action=self.mu+tf.sqrt(self.sigma)*eps;
-      a = tf.exp(-1*(self.action-self.mu)**2/(self.sigma));
-      b = 1/tf.sqrt(2*self.sigma*math.pi)
-      self.prob=a*b;
+      self.normal_dist=tf.contrib.distributions.Normal(self.mu,self.sigma);
+      self.action = self.normal_dist._sample_n(1)
+      self.action = tf.clip_by_value(self.action,action_low,action_high);
+      self.log_prob = self.normal_dist.log_prob(self.action);
+      self.entropy = self.normal_dist.entropy();
       scope.reuse_variables()
       self.pW_lstm = tf.get_variable("basic_lstm_cell/kernel")
       self.pb_lstm = tf.get_variable("basic_lstm_cell/bias")
@@ -231,7 +196,7 @@ class GameACLSTMNetwork(GameACNetwork):
     scope_name = "net_" + str(self._thread_index)+"_value"
     with tf.device(self._device), tf.variable_scope(scope_name) as scope:
       ### value weights
-      self.vW_fc1, self.vb_fc1 = self._fc_variable([STATE_SIZE*4, 200])
+      self.vW_fc1, self.vb_fc1 = self._fc_variable([state_size*4, 200])
       # lstm
       self.vlstm = tf.contrib.rnn.BasicLSTMCell(200, state_is_tuple=True)
       # weight for value output layer
@@ -287,10 +252,6 @@ class GameACLSTMNetwork(GameACNetwork):
     return action_out[0]
 
   def run_value(self, sess, s_t):
-    # This run_value() is used for calculating V for bootstrapping at the 
-    # end of LOCAL_T_MAX time step sequence.
-    # When next sequcen starts, V will be calculated again with the same state using updated network weights,
-    # so we don't update LSTM state here.
     vprev_lstm_state_out = self.vlstm_state_out
     v_out = sess.run(self.v,
                          feed_dict = {self.s : [s_t],
@@ -311,5 +272,16 @@ class GameACLSTMNetwork(GameACNetwork):
             self.pW_fc2, self.pb_fc2,
             self.pW_fc3, self.pb_fc3,
             self.vW_fc1, self.vb_fc1,
+            self.vW_lstm, self.vb_lstm,
+            self.vW_fc2, self.vb_fc2]
+  
+  def get_pvars(self):
+    return [self.pW_fc1, self.pb_fc1,
+            self.pW_lstm, self.pb_lstm,
+            self.pW_fc2, self.pb_fc2,
+            self.pW_fc3, self.pb_fc3]
+  
+  def get_vvars(self):
+    return [self.vW_fc1, self.vb_fc1,
             self.vW_lstm, self.vb_lstm,
             self.vW_fc2, self.vb_fc2]

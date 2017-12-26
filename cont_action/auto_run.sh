@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ps_num=0
-worker_num=2
+worker_num=0
 
 for i in `eval echo {0..$ps_num}`
 do
